@@ -64,9 +64,14 @@ impl<'de> Deserialize<'de> for FilePath<'de> {
             where
                 E: de::Error,
             {
-                Ok(FilePath::from(
-                        PathBuf::from(String::from_utf8_lossy(v).into_owned())
-                ))
+                Ok(FilePath::from(PathBuf::from(
+                            // SAFETY: File path do not necessarily contain only a sequence
+                            // of UTF-8 characters, thus it's safe to assume that the path *contains*
+                            // a non-vaalid UTF-8 characters, hence the `unsafe` block.
+                            unsafe{
+                                String::from_utf8_unchecked(v.to_vec())
+                            }
+                )))
             }
         }
         let visitor = FilePathVisitor;

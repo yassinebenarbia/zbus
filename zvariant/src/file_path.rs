@@ -1,49 +1,70 @@
-use std::{ffi::{OsStr, OsString}, path::{Path, PathBuf}};
-
+use std::{borrow::Cow, path::{Path, PathBuf}};
 use serde::{de::{self, Visitor}, Deserialize, Deserializer, Serialize, Serializer};
-use crate::de::Deserializer as ZbusDeserializer;
 
 use crate::Type;
 
 /// A file name represented as a nul-terminated byte array.
-#[derive(Type, Debug, Default, PartialEq)]
+///
+/// While `zvariant::Type` and `serde::{Serialize, Deserialize}`, are implemented for [`Path`] and [`PathBuf`], unfortunately `serde` serializes them as UTF-8 strings. This is not the desired behavior in most cases since file paths are not guaranteed to contain only UTF-8 characters.
+/// To solve this problem, this type is provided which encodes the underlying file path as a null-terminated byte array. Encoding as byte array is also more efficient.
+///
+///
+/// # Exmples
+/// ```
+/// use zvariant::FilePath;
+/// use std::path::{Path, PathBuf};
+///
+/// let path = Path::new("/hello/world");
+/// let path_buf = PathBuf::from(path);
+///
+/// let p1 = FilePath::from(path);
+/// let p2 = FilePath::from(path_buf);
+///
+/// assert_eq!(p1, p2);
+/// ```
+#[derive(Type, Debug, Default, PartialEq, Eq)]
 #[zvariant(signature = "ay")]
-pub struct FilePath(OsString);
+pub struct FilePath<'f>(Cow<'f, Path>);
 
-impl From<&Path> for FilePath {
-    fn from(value: &Path) -> Self {
-        Self(value.as_os_str().to_os_string())
+
+impl<'f> From<&'f Path> for FilePath<'f> {
+    fn from(value: &'f Path) -> Self {
+        Self(Cow::Borrowed(value))
     }
 }
 
-impl From<PathBuf> for FilePath {
+impl<'f> From<PathBuf> for FilePath<'f> {
     fn from(value: PathBuf) -> Self {
-        Self(value.as_os_str().to_os_string())
+        Self(Cow::Owned(value))
     }
 }
 
-impl<'de> Deserialize<'de> for FilePath {
+impl<'f> From<&'f str> for FilePath<'f> {
+    fn from(value: &str) -> Self {
+        Self(Cow::Owned(PathBuf::from(value)))
+    }
+}
+
+impl<'de> Deserialize<'de> for FilePath<'de> {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>
     {
         struct FilePathVisitor;
         impl<'de> Visitor<'de> for FilePathVisitor {
-            type Value = FilePath;
+            type Value = FilePath<'de>;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("unable to deserialize FilePath")
+                formatter.write_str("a byte array")
             }
 
             fn visit_bytes<E>(self, v: &[u8]) -> std::result::Result<Self::Value, E>
             where
                 E: de::Error,
             {
-                unsafe {
-                    Ok(FilePath(
-                            OsStr::from_encoded_bytes_unchecked(v).to_os_string()
-                    ))
-                }
+                Ok(FilePath::from(
+                        PathBuf::from(String::from_utf8_lossy(v).into_owned())
+                ))
             }
         }
         let visitor = FilePathVisitor;
@@ -51,47 +72,51 @@ impl<'de> Deserialize<'de> for FilePath {
     }
 }
 
-impl Serialize for FilePath {
+impl<'f> Serialize for FilePath<'f> {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer
     {
-        serializer.serialize_bytes(&self.0.as_encoded_bytes())
+        serializer.serialize_bytes(&self.0.as_os_str().as_encoded_bytes())
     }
 }
 
 
-impl AsRef<FilePath> for FilePath {
-    fn as_ref(&self) -> &FilePath {
+impl<'f> AsRef<FilePath<'f>> for FilePath<'f> {
+    fn as_ref(& self) -> &FilePath<'f> {
         &self
     }
 }
 
-impl Into<PathBuf> for FilePath {
+impl<'f> Into<PathBuf> for FilePath<'f> {
     fn into(self) -> PathBuf {
-        PathBuf::from(self.0)
+        PathBuf::from(self.0.into_owned())
     }
 }
 
 #[cfg(test)]
 mod file_path {
     use crate::zvariant::Signature;
+    use std::path::{Path, PathBuf};
     use super::*;
 
     #[test]
     fn filepath_from() {
         let path = Path::new("/hello/world");
-        let _ = FilePath::from(path);
-        let path_buf = PathBuf::from("/hello/world");
-        let _ = FilePath::from(path_buf);
+        let path_buf = PathBuf::from(path);
+
+        let p1 = FilePath::from(path);
+        let p2 = FilePath::from(path_buf);
+        let p3 = FilePath::from("/hello/world");
+
+        assert_eq!(p1, p2);
+        assert_eq!(p2, p3)
     }
 
     #[test]
     fn filepath_signature() {
         assert_eq!(
-            &Signature::Array(zvariant_utils::signature::Child::Static {
-                child: &Signature::U8
-            }),
+            &Signature::static_array(&Signature::U8),
             FilePath::SIGNATURE
         );
     }

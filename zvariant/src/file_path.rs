@@ -19,8 +19,10 @@ use crate::Type;
 ///
 /// let p1 = FilePath::from(path);
 /// let p2 = FilePath::from(path_buf);
+/// let p3 = FilePath::from("/hello/world");
 ///
 /// assert_eq!(p1, p2);
+/// assert_eq!(p2, p3);
 /// ```
 #[derive(Type, Debug, Default, PartialEq, Eq)]
 #[zvariant(signature = "ay")]
